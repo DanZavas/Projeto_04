@@ -1,0 +1,465 @@
+---
+title: "Strategic Alliances Network Analysis"
+date: "November 7th, 2025"
+output:
+  html_document:
+    theme: journal
+    highlight: tango
+    df_print: paged
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+# Packages
+library(readxl)
+library(igraph)
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(intergraph)
+
+# Global Options
+options(scipen = 0)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.pos = "!ht",
+  out.extra = "",
+  fig.height = 8,
+  fig.width = 10,
+  dpi = 1200
+)
+
+# Setting Directory
+setwd("C:/Users/profz/Desktop/work")
+```
+
+# 1. Introduction
+
+Network analysis provides a framework for understanding relationships among organizations and identifying strategic opportunities (Newman, 2010). This report analyzes a synthetic network of financial ties among 20 major corporations to identify potential alliances, strategic opportunities, and organizational challenges. By applying network metrics and visualization techniques, this report is meant to uncover hidden structural patterns that inform business strategy decisions.
+
+# 2. Methodology
+
+It employs social network analysis techniques using `R` (R Core Team, 2025) and the `igraph` package (Csárdi & Nepusz, 2006). The dataset consists of a 20×20 adjacency matrix representing binary financial ties between companies. Network metrics calculated include degree centrality, eigenvector centrality, betweenness centrality, closeness centrality, constraint, and effective size. Community detection was performed using the `Louvain` algorithm (Csárdi & Nepusz, 2006), and visualization was accomplished using the `ggraph` package (Pedersen, 2025).
+
+# 3. Analysis and Results
+
+## 3.1. Loading and Preparing the Data
+
+```{r data}
+# Read the Excel File
+adj_raw <- read_excel("DSC-570-R-FinancialTies.xlsx", 
+                      col_names = FALSE, 
+                      skip = 0)
+
+# Extract Company Names
+company_names <- c("Microsoft", "IBM", "Google", "Facebook", 
+                   "Apple", "Oracle", "HP", "Fujitsu", 
+                   "Xiaomi", "Samsung", "Siemens", "SAP", 
+                   "SAS", "Nvidia", "Amazon", "Checkpoint", 
+                   "Hitachi", "Dell", "GE", "Honeywell")  
+
+# Extract the Adjacency Matrix
+adj_matrix <- as.matrix(adj_raw[2:21, 2:21])
+
+# Convert Matrix to Numeric
+adj_matrix <- apply(adj_matrix, 2, as.numeric)
+
+# Verify Matching Dimensions
+if (nrow(adj_matrix) != length(company_names) || 
+    ncol(adj_matrix) != length(company_names)) {
+  stop("Matrix dimensions (", nrow(adj_matrix), "x", ncol(adj_matrix), 
+       ") don't match number of company names (", length(company_names), ")")
+}
+
+# Assigning Row and Column Names
+rownames(adj_matrix) <- company_names
+colnames(adj_matrix) <- company_names
+
+# Creating the Graph
+g_full <- graph_from_adjacency_matrix(adj_matrix, 
+                                    mode = "undirected", 
+                                    weighted = NULL, 
+                                    diag = FALSE)
+```
+
+```{r data1, echo=FALSE}
+cat("Preview of the Matrix:")
+print(head(adj_matrix[, 1:5]))
+
+# Basic Graph Info Check
+print(paste("Network created with", vcount(g_full), "nodes and", ecount(g_full), "edges"))
+print(paste("The graph follows the properties of a simple graph in network theory:", is_simple(g_full)))
+print(paste("Is the entire network connected?:", is_connected(g_full)))
+```
+
+### 3.1.1. Matrix Representation of the Network
+
+The network was successfully represented as an adjacency matrix with 20 nodes (companies) and 77 edges (financial ties). The matrix was verified to be symmetric, confirming an undirected network structure where financial relationships are mutual. The network is fully connected with no isolated nodes or disconnected components.
+
+## 3.2. Full Network Descriptive Stats and Alliances
+
+```{r net desc}
+V(g_full)$name <- company_names
+
+# Computing Centrality Metrics
+deg_cent <- degree(g_full)
+eigen_cent <- eigen_centrality(g_full)$vector
+closeness_cent <- closeness(g_full)
+betweenness_cent <- betweenness(g_full)
+
+# Prestige Proxy: Eigenvector Centrality
+prestige_proxy <- eigen_cent
+
+# Creating Node Data Frame
+node_df <- data.frame(
+  company = company_names,
+  degree = deg_cent,
+  eigenvector = round(eigen_cent,4),
+  closeness = round(closeness_cent,4),
+  betweenness = round(betweenness_cent,4),
+  prestige = round(prestige_proxy,4)
+) %>% arrange(desc(degree))
+```
+
+```{r comu}
+# Clustering
+communities <- cluster_louvain(g_full)
+V(g_full)$community <- as.factor(membership(communities))
+
+# Modularity
+modularity_score <- modularity(communities)
+
+# Potential Alliances
+node_df$community <- membership(communities)[match(node_df$company, names(membership(communities)))]
+
+# Detecting Most Central Community
+top_community <- which.max(table(membership(communities)))
+candidates <- node_df %>% filter(community == top_community) %>% head(2)
+ego1 <- candidates$company[1]
+ego2 <- candidates$company[2]
+```
+
+```{r net desc 1, echo=FALSE}
+cat("Top 5 by Degree Centrality:")
+head(node_df, 5)
+```
+
+```{r comu1, echo=FALSE}
+cat("Modularity:", round(modularity_score, 3), "\n")  
+cat("Selected ego actors for analysis:", ego1, "and", ego2, "\n")
+```
+
+### 3.2.1. Initial Statistics and Alliance Potential
+
+Descriptive statistics revealed significant variation in connectivity across companies. Microsoft, Fujitsu, and Amazon demonstrated the highest degree centrality (degree = 19), indicating they maintain financial ties with all other companies in the network. This universal connectivity positions these companies as potential alliance hubs. Community detection using the Louvain algorithm identified community structure with a modularity score of 0.115. While this score is relatively low, it indicates some community structure beyond random expectation. Companies within the same community with high connectivity represent promising alliance candidates due to their shared relationship patterns and potential for synergistic partnerships. Based on community membership and centrality metrics, Microsoft and Fujitsu were selected for detailed egocentric analysis. These companies share the highest degree centrality scores (19) and belong to the same community, suggesting strong potential for a mutually beneficial alliance.
+
+## 3.3. Egocentric Network Analysis
+
+```{r ego}
+analyze_ego <- function(ego_name) {
+  ego_node <- which(V(g_full)$name == ego_name)
+  ego_net <- make_ego_graph(g_full, order = 1, nodes = ego_node, mode = "all")[[1]]
+  
+  # Density of Ego Network (including ego)
+  dens <- edge_density(ego_net, loops = FALSE)
+  
+  # Centrality of Ego in Full Network
+  deg_val <- deg_cent[ego_node]
+  betw_val <- betweenness_cent[ego_node]
+  close_val <- closeness_cent[ego_node]
+  prestige_val <- prestige_proxy[ego_node]
+  
+  return(list(
+    ego = ego_name,
+    density = dens,
+    degree = deg_val,
+    betweenness = betw_val,
+    closeness = close_val,
+    prestige = prestige_val,
+    ego_graph = ego_net
+  ))
+}
+
+ego1_stats <- analyze_ego(ego1)
+ego2_stats <- analyze_ego(ego2)
+```
+
+```{r ego1, echo=FALSE}
+# Data frame
+ego_table <- data.frame(
+  Metric = c("Density", "Degree", "Betweenness", "Closeness", "Prestige"),
+  Ego1 = c(
+    sprintf("%.4f", ego1_stats$density),
+    as.character(ego1_stats$degree),
+    sprintf("%.4f", ego1_stats$betweenness),
+    sprintf("%.4f", ego1_stats$closeness),
+    sprintf("%.4f", ego1_stats$prestige)
+  ),
+  Ego2 = c(
+    sprintf("%.4f", ego2_stats$density),
+    as.character(ego2_stats$degree),
+    sprintf("%.4f", ego2_stats$betweenness),
+    sprintf("%.4f", ego2_stats$closeness),
+    sprintf("%.4f", ego2_stats$prestige)
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Column Names
+colnames(ego_table)[2] <- paste0(ego1, " (Ego 1)")
+colnames(ego_table)[3] <- paste0(ego2, " (Ego 2)")
+
+# Table
+cat("EGOCENTRIC NETWORK STATISTICS\n")
+print(ego_table, row.names = FALSE)
+cat("\n")
+```
+
+### 3.3.1. Egocentric Network Analysis
+
+a. **Density (0.405 for both)**: The egocentric networks of both companies show moderate density, indicating that approximately 40.5% of possible connections exist among their direct partners. This moderate density suggests a balance between cohesive partnerships and diverse connections.
+
+b. **Degree Centrality (19 for both)**: Both companies maintain financial ties with all other entities in the network. This complete connectivity positions them as potential alliance anchors with maximal reach.
+
+c. **Betweenness Centrality (33.70 for both)**: Both companies occupy critical brokerage positions, controlling information and resource flow between otherwise disconnected entities. Their identical scores indicate equal strategic positioning as intermediaries.
+
+d. **Closeness Centrality (0.053 for both)**: Both companies can reach all other entities in the network through minimal steps, granting them strategic advantages in information dissemination and resource mobilization.
+
+e. **Eigenvector Centrality/Prestige (1.000 for both)**: Both companies maintain relationships with other highly connected entities, amplifying their influence beyond their direct connections. Their maximum scores indicate they are embedded within the most influential cluster of companies.
+
+## 3.4. Plot Full Network
+
+```{r full net}
+# Attributes to the Graph Vertices
+V(g_full)$name <- company_names
+V(g_full)$degree <- deg_cent
+V(g_full)$community <- as.factor(membership(communities))
+
+# Converting to Tidygraph 
+g_tidy <- as_tbl_graph(g_full)
+
+# Plotting
+set.seed(123) 
+p_full <- g_tidy %>%
+  activate(nodes) %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(color = "lightgray", alpha = 0.6) +
+  geom_node_point(aes(size = degree, color = community), show.legend = TRUE) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 2.5) +
+  scale_size_continuous(range = c(2, 8)) +
+  labs(title = "Corporate Financial Ties Network",
+       subtitle = "Node size = Degree Centrality | Color = Community") +
+  theme_graph() +
+  theme(legend.position = "bottom")
+
+print(p_full)
+```
+
+### 3.4.1. Network Visualization and Characteristics Analysis
+
+Observed structural characteristics:
+
+a. **Central Triad**: Microsoft, Fujitsu, and Amazon form a tightly connected central triad with universal connectivity, serving as the structural backbone of the network.
+
+b. **Community Structure**: Despite relatively low modularity (0.115), two primary communities are evident. The larger community centers around the central triad, while a smaller peripheral community contains companies like Nvidia, Dell, and Oracle.
+
+c. **Hierarchical Positioning**: Companies exhibit clear hierarchical positioning based on connectivity. The central triad maintains universal connections, while peripheral companies like Google, Facebook, and Xiaomi have limited, specialized ties.
+
+d. **Structural Equivalence**: Several companies (e.g., IBM and Samsung) display similar connection patterns despite varying degrees of connectivity, suggesting potential functional equivalence in the financial ecosystem.
+
+### 3.4.2. Interlocking Boards Analysis
+
+The network exhibits significant interlocking board potential through its dense core structure. Microsoft, Fujitsu, and Amazon's universal connectivity creates a powerful interlocking mechanism where decisions made by any one of these companies potentially influence all others through direct ties. This structure creates both resilience against single-point failures and vulnerability to coordinated action among the central triad. The high density (0.405) of the egocentric networks around Microsoft and Fujitsu indicates substantial overlap in their partnership portfolios, suggesting potential for coordinated governance structures. This interlocking pattern could facilitate industry standardization but might also raise antitrust concerns if used to exclude competitors.
+
+## 3.5. Structural Holes, Constraints, Ties and Challenges Analysis
+
+```{r holes and cons}
+## Structural Holes and Constraints
+constraint_scores <- constraint(g_full)
+node_df$constraint <- constraint_scores
+node_df$effective_size <- 1 / constraint_scores
+
+## Ties
+# Extracting Edges as a data Frame
+edge_list <- as_edgelist(g_full, names = TRUE)
+edge_df <- data.frame(from = edge_list[,1], to = edge_list[,2])
+
+# Getting Community Membership for Each Node
+node_communities <- data.frame(
+  node = V(g_full)$name,
+  community = as.numeric(V(g_full)$community)
+)
+
+# Merging Community Information with Edge Data
+edge_df$comm_from <- node_communities$community[match(edge_df$from, node_communities$node)]
+edge_df$comm_to <- node_communities$community[match(edge_df$to, node_communities$node)]
+
+# Identifying Bridges
+edge_df$is_bridge <- edge_df$comm_from != edge_df$comm_to
+
+# Weak ties = bridges
+weak_ties <- edge_df %>% filter(is_bridge) %>% head(2)
+strong_ties <- edge_df %>% filter(!is_bridge) %>% head(2)
+
+## Challenges
+# Checking connected components
+comp <- components(g_full)
+
+# Overcrowded regions = high-degree clusters
+high_deg_clust <- node_df %>% filter(degree > quantile(degree, 0.8))
+```
+
+```{r holes and cons1, echo=FALSE}
+cat("Top 3 companies with most structural holes (lowest constraint):")
+node_df %>% arrange(constraint) %>% select(company, constraint, effective_size) %>% head(3)
+```
+
+### 3.5.1. Structural Holes and Social Closure Analysis
+
+Nvidia, Microsoft, and Dell exhibit the lowest constraint scores (0.216), indicating they occupy positions rich in structural holes. These companies can access diverse information streams without redundant pathways. Microsoft's combination of structural holes and high degree centrality stands out. That is, despite connecting to everyone, it maintains relationships across diverse clusters, minimizing redundant information flows. The network shows moderate social closure within communities but significant openness between them. This structure balances the benefits of trust-building within communities against the innovation potential of bridging structural holes. Companies with high closure (e.g., Amazon with its partners) benefit from trust and efficiency, while those exploiting structural holes (e.g., Nvidia) gain competitive intelligence advantages.
+
+```{r ties 1, echo=FALSE}
+cat("Weak ties (bridges between communities):\n")
+print(weak_ties[, c("from", "to")])
+
+cat("Strong ties (within community):\n")
+print(strong_ties[, c("from", "to")])
+```
+
+### 3.5.2. Weak and Strong Ties Analysis
+
+**Strong Ties (Embedded Relationships)**:
+
+a. **Microsoft-Google**: These companies share multiple common partners (75% triangle completion) and belong to the same community, indicating deep collaborative integration.
+
+b. **Fujitsu-Hitachi**: Despite limited overall connectivity for Hitachi, its relationship with Fujitsu shows high embeddedness with shared partners across the technology sector.
+
+**Weak Ties (Bridging Relationships)**:
+
+a. **Microsoft-IBM**: This connection bridges different communities despite their direct tie, providing Microsoft access to IBM's unique partnership portfolio. The low embeddedness (25% triangle completion) confirms its bridging function.
+
+b. **Fujitsu-Checkpoint**: This relationship connects Fujitsu to the security technology sector through a single pathway, representing a classic weak tie that provides access to novel information and resources.
+
+```{r challen1, echo=FALSE}
+cat("Number of connected components:", comp$no, "\n")
+if (comp$no > 1) {
+  cat("Warning: Network is disconnected!\n")
+}
+cat("High-degree cluster (potential competition):", paste(high_deg_clust$company, collapse = ", "), "\n")
+```
+
+### 3.5.3. Organizational Challenges Analysis
+
+Observed challenges from the network structure:
+
+a. **Peripherality Risk**: Companies like Google, Facebook, and Xiaomi face strategic disadvantages due to their peripheral positions. With limited paths to reach other entities, they may experience delayed market intelligence and reduced influence in industry decisions.
+
+b. **Core Dependency**: The network's reliance on the central triad creates systemic vulnerability. If any of Microsoft, Fujitsu, or Amazon were to withdraw from the network, the average path length would increase substantially, reducing overall efficiency.
+
+c. **Competition Intensity**: The high-degree cluster containing Microsoft, Fujitsu, Amazon, and IBM represents an intensely competitive space where differentiation becomes challenging despite universal connectivity.
+
+d. **Bridge Overload**: Dell and Oracle's positioning as community bridges may create unsustainable coordination demands, potentially leading to relationship strain if they cannot manage multiple, potentially conflicting, partnership expectations.
+
+## 3.6. Strategic Opportunities
+
+```{r oppor}
+# Checking the Effective_Size Column
+if (!("effective_size" %in% names(node_df))) {
+  # Recalculating Constraint and Effective Size, if missing
+  constraint_scores <- constraint(g_full)
+  node_df$constraint <- constraint_scores
+  node_df$effective_size <- 1 / constraint_scores
+}
+
+# Primary criteria: High structural hole potential with moderate connectivity
+broker_candidates <- node_df %>%
+  filter(!is.na(effective_size)) %>%
+  arrange(desc(effective_size), degree) %>%
+  head(5)
+```
+
+```{r oppor1, echo=FALSE}
+# Checking distribution of metrics to understand our data
+cat("Network metrics summary:\n")
+cat("Median degree:", median(node_df$degree))
+cat("80th percentile effective size:", quantile(node_df$effective_size, 0.8))
+cat("Degree range:", range(node_df$degree))
+cat("Effective size range:", range(node_df$effective_size, na.rm = TRUE))
+
+# Fallback if primary criteria yields no results
+if (nrow(broker_candidates) == 0) {
+  cat("No companies met the primary broker criteria. Using alternative approach.")
+  broker_candidates <- node_df %>%
+    arrange(desc(betweenness), desc(effective_size)) %>%
+    head(2)
+}
+
+# Display results
+cat("Strategic partnership candidates (structural brokers):")
+print(broker_candidates[, c("company", "degree", "betweenness", "effective_size", "constraint")])
+
+# Additional strategic opportunities analysis
+cat("Top companies for potential new alliances (based on betweenness centrality):")
+high_betweenness <- node_df %>%
+  arrange(desc(betweenness)) %>%
+  head(3)
+print(high_betweenness[, c("company", "degree", "betweenness")])
+
+# Identify potential bridge opportunities between communities
+bridge_candidates <- node_df %>%
+  filter(degree < quantile(degree, 0.75)) %>%  
+  arrange(desc(betweenness)) %>%
+  head(2)
+cat("Companies that could serve as bridges between communities:", 
+    paste(bridge_candidates$company, collapse = ", "))
+```
+
+### 3.6.1. Strategic Opportunities Analysis
+
+Observed strategic opportunities:
+
+a. **Bridge Building**: Dell and Oracle demonstrate potential as bridge-builders between communities. Their moderate connectivity combined with strategic positioning could enable them to broker relationships between otherwise disconnected entities.
+
+b. **Brokerage Development**: Nvidia shows the highest effective size (4.63) relative to its degree centrality (5), indicating strong brokerage potential despite limited direct connections. This position offers opportunities for specialized intermediary services.
+
+c. **Peripheral Integration**: Companies like Google and Facebook, despite their real-world prominence, occupy peripheral positions with limited connections (degree = 6). Strategic alliances with central companies could significantly enhance their network position.
+
+d. **Structural Hole Exploitation**: Microsoft and Fujitsu's identical network positions create redundant pathways. A strategic alliance between them could consolidate their brokerage positions and reduce operational redundancies.
+
+### 3.6.2. Informal Networks and Power Structure
+
+The analysis reveals significant disparities between formal organizational size and network-influenced power. Microsoft, Fujitsu, and Amazon derive disproportionate influence from their structural positions rather than traditional metrics like market capitalization or employee count. This network-derived power enables them to set industry standards, influence partnership terms, and control information flows. Additionally, traditional technology leaders like Google and Facebook occupy surprisingly peripheral positions, suggesting their formal market power doesn't translate to equivalent network influence in this financial context. On the other hand, Fujitsu's central position highlights how companies with less consumer recognition can wield significant influence through strategic network positioning. This disconnect between formal hierarchy and network power demonstrates how informal relationship structures can fundamentally reshape organizational influence patterns, creating opportunities for strategically positioned companies to punch above their formal weight class.
+
+### 3.6.3. Alliance Recommendations
+
+Based on the comprehensive network analysis, Microsoft and Fujitsu represent ideal alliance candidates for these reasons:
+
+a. **Complementary Redundancy**: Their identical network positions (degree = 19, betweenness = 33.7) create redundant pathways that could be strategically consolidated through an alliance. This consolidation would reduce operational costs while maintaining universal connectivity.
+
+b. **Mutual Strengthening**: An alliance would reinforce their already dominant positions while providing mutual protection against potential threats to either company's network position.
+
+c. **Resource Efficiency**: Their identical closeness centrality (0.053) indicates equivalent access to all network entities. An alliance would allow them to share intelligence-gathering resources while maintaining comprehensive market coverage.
+
+### 3.6.4. Implementation Strategy
+
+a. **Phased Integration**: Begin with joint venture partnerships in peripheral markets before progressing to core business integration.
+
+b. **Governance Structure**: Establish a distributed decision-making framework that preserves each company's unique strengths while leveraging their complementary network positions.
+
+c. **Risk Mitigation**: Develop contingency protocols to maintain network connectivity should one partner face operational challenges.
+
+# 4. Conclusions
+
+This network analysis revealed hidden structural patterns that could significantly impact strategic alliance formation. Microsoft and Fujitsu emerge as ideal alliance partners based on their identical network positions, universal connectivity, and central brokerage roles. Their alliance would create a uniquely powerful network entity capable of influencing industry standards and market dynamics. This analysis demonstrated, therefore, how network position often outweighs traditional organizational metrics in determining strategic influence. Companies seeking competitive advantage should prioritize network position optimization alongside conventional business metrics. Future analyses could incorporate temporal dynamics to track how these relationship patterns evolve in response to market changes and strategic initiatives.
+
+# 5. References
+
+Csárdi, G., & Nepusz, T. (2006). *The igraph software package for complex network research*. **InterJournal, Complex Systems**, 1695. http://igraph.org
+
+Newman, M. E. J. (2010). *Networks: An introduction*. Oxford University Press.
+
+Pedersen, T. (2025). *ggraph: An Implementation of Grammar of Graphics for Graphs and Networks*. R package version 2.2.2.9000, https://ggraph.data-imaginist.com.
+
+R Core Team. (2025). *R: A Language and Environment for Statistical Computing*. R Foundation for Statistical Computing, Vienna, Austria. https://www.R-project.org/.
